@@ -3,7 +3,9 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { Login } from './pages/Login';
-import { Dashboard } from './pages/Dashboard';
+import { OperationsOverview } from './pages/OperationsOverview';
+import { Dashboard as GateDashboard } from './pages/Dashboard';
+import { StreetLightDashboard } from './pages/StreetLightDashboard';
 import { Logs } from './pages/Logs';
 import { Settings } from './pages/Settings';
 import { LoadingState } from './components/LoadingState';
@@ -27,14 +29,14 @@ const ProtectedRoute = ({ children }) => {
   return children;
 };
 
-// Public Route Guard (redirect to dashboard if already logged in)
+// Public Route Guard
 const PublicRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
 
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <LoadingState message="Loading..." />
+        <LoadingState message="Loading SmartView platform..." />
       </div>
     );
   }
@@ -52,7 +54,7 @@ function App() {
       <NotificationProvider>
         <AuthProvider>
           <Routes>
-            {/* Public Auth Route */}
+            {/* Public Authentication */}
             <Route
               path="/login"
               element={
@@ -62,16 +64,37 @@ function App() {
               }
             />
 
-            {/* Protected Dashboard Routes */}
+            {/* SmartView Central Operations Overview */}
             <Route
               path="/dashboard"
               element={
                 <ProtectedRoute>
-                  <Dashboard />
+                  <OperationsOverview />
                 </ProtectedRoute>
               }
             />
 
+            {/* Operation 01: Remote Gate Control */}
+            <Route
+              path="/operations/gate"
+              element={
+                <ProtectedRoute>
+                  <GateDashboard />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Operation 02: Smart Street Lighting (Real Hardware Test) */}
+            <Route
+              path="/operations/street-light"
+              element={
+                <ProtectedRoute>
+                  <StreetLightDashboard />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Audit Logs */}
             <Route
               path="/logs"
               element={
@@ -81,6 +104,7 @@ function App() {
               }
             />
 
+            {/* Settings */}
             <Route
               path="/settings"
               element={
@@ -90,7 +114,7 @@ function App() {
               }
             />
 
-            {/* Default fallback */}
+            {/* Fallback routes */}
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
