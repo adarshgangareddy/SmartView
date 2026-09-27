@@ -27,6 +27,9 @@ MqttManager::MqttManager(GateController& gate, ScheduleManager& sched, RtcManage
 }
 
 void MqttManager::begin() {
+#if MQTT_BROKER_PORT == 8883
+  wifiClient.setInsecure();
+#endif
   mqttClient.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
   mqttClient.setCallback([this](char* topic, byte* payload, unsigned int length) {
     this->handleMessage(topic, payload, length);

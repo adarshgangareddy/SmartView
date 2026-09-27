@@ -16,7 +16,7 @@ class MqttService {
     this.brokerUrl = process.env.MQTT_BROKER_URL;
     this.username = process.env.MQTT_USERNAME;
     this.password = process.env.MQTT_PASSWORD;
-    this.clientId = process.env.MQTT_CLIENT_ID || `gate-backend-${Math.random().toString(16).substring(2, 8)}`;
+    this.clientId = process.env.MQTT_CLIENT_ID || `smartview-backend-${Math.random().toString(16).substring(2, 8)}`;
     this.heartbeatWatchdogTimer = null;
     this.timeoutSeconds = parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS || '90', 10);
   }
@@ -51,19 +51,23 @@ class MqttService {
         this.isConnected = true;
         logger.info(`Connected to MQTT Broker successfully (clientId: ${this.clientId})`);
 
-        // Subscribe to all incoming gate topics
+        // Subscribe to all SmartView and Gate topics
         const topicsToSub = [
-          TOPICS.ALL_STATUS,
-          TOPICS.ALL_ACK,
-          TOPICS.ALL_HEARTBEAT,
-          TOPICS.ALL_TELEMETRY,
+          TOPICS.ALL_SMARTVIEW_STATUS,
+          TOPICS.ALL_SMARTVIEW_ACK,
+          TOPICS.ALL_SMARTVIEW_HEARTBEAT,
+          TOPICS.ALL_SMARTVIEW_TELEMETRY,
+          TOPICS.ALL_GATE_STATUS,
+          TOPICS.ALL_GATE_ACK,
+          TOPICS.ALL_GATE_HEARTBEAT,
+          TOPICS.ALL_GATE_TELEMETRY,
         ];
 
         this.client.subscribe(topicsToSub, { qos: 1 }, (err) => {
           if (err) {
-            logger.error('Failed to subscribe to gate topics:', err.message);
+            logger.error('Failed to subscribe to MQTT topics:', err.message);
           } else {
-            logger.info('Subscribed to MQTT topics:', topicsToSub.join(', '));
+            logger.info('Subscribed to SmartView MQTT topics:', topicsToSub.join(', '));
           }
         });
       });
@@ -116,20 +120,20 @@ class MqttService {
   }
 
   async publishCommand(deviceId, commandPayload) {
-    const topic = TOPICS.command(deviceId);
+    const isGate = deviceId.startsWith('GATE');
+    const primaryTopic = isGate ? TOPICS.gateCommand(deviceId) : TOPICS.command(deviceId);
     const payloadStr = JSON.stringify(commandPayload);
 
-    logger.info(`Publishing command to ${topic}:`, commandPayload);
+    logger.info(`Publishing command to ${primaryTopic}:`, commandPayload);
 
-    // If real MQTT client is connected, publish via MQTT
+    // If real MQTT client is connected, publish to broker
     if (this.client && this.isConnected) {
       return new Promise((resolve, reject) => {
-        this.client.publish(topic, payloadStr, { qos: 1 }, (err) => {
+        this.client.publish(primaryTopic, payloadStr, { qos: 1 }, (err) => {
           if (err) {
-            logger.error(`Failed to publish command to ${topic}:`, err.message);
+            logger.error(`Failed to publish command to ${primaryTopic}:`, err.message);
             reject(err);
           } else {
-            logger.info(`Published command to ${topic} successfully`);
             resolve(true);
           }
         });
@@ -138,8 +142,8 @@ class MqttService {
 
     // Dev/Mock fallback
     if (mockDeviceSimulator.isEnabled) {
-      logger.info(`[MQTT MOCK] Routing command to MockDeviceSimulator: ${commandPayload.command}`);
-      mockDeviceSimulator.handleCommand(commandPayload.command, commandPayload.requestId);
+      logger.info(`[MQTT MOCK] Routing command for ${deviceId} to MockDeviceSimulator`);
+      mockDeviceSimulator.handleDeviceCommand(deviceId, commandPayload);
       return true;
     }
 
@@ -147,7 +151,7 @@ class MqttService {
   }
 
   async publishScheduleConfig(deviceId, schedulePayload) {
-    const topic = TOPICS.config(deviceId);
+    const topic = deviceId.startsWith('GATE') ? TOPICS.gateConfig(deviceId) : TOPICS.config(deviceId);
     const payloadStr = JSON.stringify(schedulePayload);
 
     logger.info(`Publishing schedule configuration to ${topic}:`, schedulePayload);

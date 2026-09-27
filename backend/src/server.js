@@ -2,11 +2,13 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
+import http from 'http';
 import { logger } from './utils/logger.js';
 import { standardLimiter } from './middleware/rateLimiter.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { mqttService } from './mqtt/mqttClient.js';
 import { mockDeviceSimulator } from './services/mockDeviceService.js';
+import { realtimeService } from './services/realtimeService.js';
 
 // Import Route Handlers
 import authRoutes from './routes/authRoutes.js';
@@ -14,6 +16,7 @@ import deviceRoutes from './routes/deviceRoutes.js';
 import scheduleRoutes from './routes/scheduleRoutes.js';
 import commandRoutes from './routes/commandRoutes.js';
 import logRoutes from './routes/logRoutes.js';
+import streetLightRoutes from './routes/streetLightRoutes.js';
 
 dotenv.config();
 
@@ -37,11 +40,10 @@ if (process.env.FRONTEND_URL) {
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g., mobile apps, curl, server-to-server)
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-      return callback(null, true); // Permissive in development, can restrict in production
+      return callback(null, true);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -64,6 +66,8 @@ app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'ok',
     timestamp: new Date().toISOString(),
+    platform: 'SmartView Unified IoT Operations Platform',
+    operations: ['GATE_CONTROL', 'SMART_STREET_LIGHTING'],
     env: NODE_ENV,
   });
 });
@@ -73,35 +77,43 @@ app.use('/api/auth', authRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/devices', scheduleRoutes);
 app.use('/api/devices', commandRoutes);
+app.use('/api/devices', streetLightRoutes);
 app.use('/api/devices', logRoutes);
 
 // 7. Error & 404 Handlers
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// 8. Start Background Services
+// 8. Create HTTP Server to host Express and WebSocket Server together
+const server = http.createServer(app);
+
+// 9. Attach Realtime WebSocket Server
+realtimeService.initialize(server);
+
+// 10. Start Background MQTT Services
 mqttService.connect();
 
 if (process.env.MOCK_DEVICE === 'true' || !process.env.MQTT_BROKER_URL) {
   mockDeviceSimulator.start();
 }
 
-// 9. Start HTTP Server
-const server = app.listen(PORT, () => {
+// 11. Start Listening
+server.listen(PORT, () => {
   logger.info(`===================================================`);
-  logger.info(` Gate Control Backend running on port: ${PORT}`);
-  logger.info(` Environment: ${NODE_ENV}`);
-  logger.info(` Mode: ${process.env.MOCK_DEVICE === 'true' ? 'MOCK_DEVICE (Virtual ESP32 Simulator)' : 'PRODUCTION'}`);
+  logger.info(` SmartView IoT Operations Platform Backend: ${PORT}`);
+  logger.info(` Operations: Gate Control & Smart Street Lighting`);
+  logger.info(` Realtime WebSocket: ws://localhost:${PORT}/ws`);
+  logger.info(` Mode: ${process.env.MOCK_DEVICE === 'true' ? 'MOCK_DEVICE (Simulated)' : 'PRODUCTION'}`);
   logger.info(` Health Check: http://localhost:${PORT}/health`);
   logger.info(`===================================================`);
 });
 
 // Graceful Shutdown
 const shutdown = () => {
-  logger.info('Shutting down server gracefully...');
+  logger.info('Shutting down SmartView server gracefully...');
   mockDeviceSimulator.stop();
   server.close(() => {
-    logger.info('HTTP server closed.');
+    logger.info('HTTP & WebSocket server closed.');
     process.exit(0);
   });
 };

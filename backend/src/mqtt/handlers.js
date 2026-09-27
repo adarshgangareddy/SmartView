@@ -1,4 +1,7 @@
 import { deviceService } from '../services/deviceService.js';
+import { streetLightService } from '../services/streetLightService.js';
+import { realtimeService } from '../services/realtimeService.js';
+import { parseTopic } from './topics.js';
 import { logger } from '../utils/logger.js';
 import { EVENT_TYPES, DEVICE_STATUS } from '../utils/constants.js';
 
@@ -11,25 +14,33 @@ export const handleMqttMessage = async (topic, payloadString) => {
       payload = { raw: payloadString };
     }
 
-    const parts = topic.split('/');
-    if (parts.length < 3 || parts[0] !== 'gate') {
+    const parsed = parseTopic(topic);
+    if (!parsed) {
       return;
     }
 
-    const deviceId = parts[1];
-    const messageType = parts[2];
-
+    const { deviceId, type: messageType } = parsed;
     logger.debug(`Processing MQTT ${messageType} for ${deviceId}:`, payload);
 
     switch (messageType) {
       case 'status': {
         const isOnline = payload.online !== undefined ? (payload.online ? DEVICE_STATUS.ONLINE : DEVICE_STATUS.OFFLINE) : DEVICE_STATUS.ONLINE;
-        await deviceService.updateDeviceStatus(deviceId, {
+        const updates = {
           status: isOnline,
           gate_status: payload.gateStatus,
+          light_status: payload.lightStatus,
           mode: payload.mode,
           firmware_version: payload.firmwareVersion,
           last_seen: payload.timestamp || new Date().toISOString(),
+        };
+
+        const updatedDevice = await deviceService.updateDeviceStatus(deviceId, updates);
+
+        // Broadcast to WebSocket clients
+        realtimeService.broadcast('DEVICE_STATUS', {
+          deviceId,
+          device: updatedDevice,
+          payload,
         });
 
         if (payload.gateStatus) {
@@ -37,6 +48,13 @@ export const handleMqttMessage = async (topic, payloadString) => {
             deviceId,
             `GATE_${payload.gateStatus}`,
             `Device reported gate status: ${payload.gateStatus}`,
+            payload
+          );
+        } else if (payload.lightStatus) {
+          await deviceService.addDeviceLog(
+            deviceId,
+            `LIGHT_${payload.lightStatus}`,
+            `Street light reported state: ${payload.lightStatus}`,
             payload
           );
         }
@@ -53,6 +71,15 @@ export const handleMqttMessage = async (topic, payloadString) => {
             `Device acknowledged command ${payload.command || ''} (requestId: ${requestId})`,
             payload
           );
+
+          // Broadcast ACK to WebSocket clients
+          realtimeService.broadcast('COMMAND_ACK', {
+            deviceId,
+            requestId,
+            command: payload.command,
+            status: 'ACKNOWLEDGED',
+            payload,
+          });
         }
         break;
       }
@@ -61,18 +88,38 @@ export const handleMqttMessage = async (topic, payloadString) => {
         await deviceService.updateDeviceStatus(deviceId, {
           status: DEVICE_STATUS.ONLINE,
           gate_status: payload.gateStatus,
+          light_status: payload.lightStatus,
           last_seen: payload.timestamp || new Date().toISOString(),
+        });
+
+        // Broadcast alive heartbeat
+        realtimeService.broadcast('HEARTBEAT', {
+          deviceId,
+          timestamp: payload.timestamp || new Date().toISOString(),
+          status: DEVICE_STATUS.ONLINE,
         });
         break;
       }
 
       case 'telemetry': {
-        await deviceService.addDeviceLog(
-          deviceId,
-          'TELEMETRY',
-          `Device telemetry: RSSI ${payload.rssi}dBm, Heap ${payload.freeHeap}B, Uptime ${payload.uptime}s`,
-          payload
-        );
+        // If street light telemetry
+        if (
+          payload.motionZones !== undefined ||
+          payload.motion_zones !== undefined ||
+          payload.isNight !== undefined ||
+          payload.is_night !== undefined ||
+          deviceId.includes('STREETLIGHT')
+        ) {
+          await streetLightService.recordTelemetry(deviceId, payload);
+        } else {
+          // Gate telemetry
+          await deviceService.addDeviceLog(
+            deviceId,
+            EVENT_TYPES.TELEMETRY,
+            `Device telemetry: RSSI ${payload.rssi || '--'}dBm, Heap ${payload.freeHeap || '--'}B`,
+            payload
+          );
+        }
         break;
       }
 

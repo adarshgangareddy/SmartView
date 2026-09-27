@@ -1,18 +1,11 @@
 -- ============================================================================
--- REMOTE IOT GATE CONTROL SYSTEM - SUPABASE POSTGRESQL SCHEMA
+-- SMARTVIEW - UNIFIED IOT OPERATIONS PLATFORM DATABASE SCHEMA (SUPABASE POSTGRESQL)
+-- Supports Multiple Device Types: GATE, STREET_LIGHT, etc.
 -- ============================================================================
 
--- Enable UUID extension if not already enabled
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- Clean up existing tables if recreating (optional / safe migrations)
--- DROP TABLE IF EXISTS device_logs CASCADE;
--- DROP TABLE IF EXISTS commands CASCADE;
--- DROP TABLE IF EXISTS schedules CASCADE;
--- DROP TABLE IF EXISTS devices CASCADE;
--- DROP TABLE IF EXISTS users CASCADE;
-
--- 1. USERS TABLE (Dashboard Operators & Administrators)
+-- 1. USERS TABLE (Shared Authentication)
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
@@ -23,28 +16,42 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 2. DEVICES TABLE
--- Status: ONLINE, OFFLINE
--- Gate Status: OPEN, CLOSED, OPENING, CLOSING, UNKNOWN
--- Mode: AUTO, MANUAL
+-- 2. DEVICES TABLE (Generalized Multi-Operation Device Model)
+-- device_type: GATE, STREET_LIGHT, etc.
 CREATE TABLE IF NOT EXISTS devices (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     device_id VARCHAR(64) UNIQUE NOT NULL,
-    name VARCHAR(128) NOT NULL DEFAULT 'Main Security Gate',
+    device_type VARCHAR(32) NOT NULL DEFAULT 'GATE',
+    name VARCHAR(128) NOT NULL DEFAULT 'SmartView Node',
     status VARCHAR(16) NOT NULL DEFAULT 'OFFLINE' CHECK (status IN ('ONLINE', 'OFFLINE')),
-    gate_status VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN' CHECK (gate_status IN ('OPEN', 'CLOSED', 'OPENING', 'CLOSING', 'UNKNOWN')),
+    gate_status VARCHAR(16) DEFAULT 'UNKNOWN' CHECK (gate_status IN ('OPEN', 'CLOSED', 'OPENING', 'CLOSING', 'UNKNOWN')),
+    light_status VARCHAR(16) DEFAULT 'OFF' CHECK (light_status IN ('ON', 'OFF', 'DIM', 'ADAPTIVE')),
     mode VARCHAR(16) NOT NULL DEFAULT 'AUTO' CHECK (mode IN ('AUTO', 'MANUAL')),
+    capabilities JSONB DEFAULT '[]'::jsonb,
     last_seen TIMESTAMPTZ,
     firmware_version VARCHAR(32) NOT NULL DEFAULT '1.0.0',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Index for fast lookup by device_id
 CREATE INDEX IF NOT EXISTS idx_devices_device_id ON devices(device_id);
+CREATE INDEX IF NOT EXISTS idx_devices_device_type ON devices(device_type);
 
--- 3. SCHEDULES TABLE
--- One schedule entry per day of week for each device
+-- 3. STREET LIGHT TELEMETRY TABLE (Exact sensors: 1x LDR, 4x IR, 4x LED PWM)
+CREATE TABLE IF NOT EXISTS street_light_telemetry (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    device_id VARCHAR(64) NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+    is_night BOOLEAN NOT NULL DEFAULT false,
+    ambient_light VARCHAR(16) NOT NULL DEFAULT 'DAY',
+    motion_zones JSONB NOT NULL DEFAULT '{"zone1": false, "zone2": false, "zone3": false, "zone4": false}'::jsonb,
+    led_brightness JSONB NOT NULL DEFAULT '{"led1": 0, "led2": 0, "led3": 0, "led4": 0}'::jsonb,
+    mode VARCHAR(16) NOT NULL DEFAULT 'AUTO',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_street_light_telemetry ON street_light_telemetry(device_id, created_at DESC);
+
+-- 4. GATE SCHEDULES TABLE
 CREATE TABLE IF NOT EXISTS schedules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     device_id VARCHAR(64) NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
@@ -54,21 +61,17 @@ CREATE TABLE IF NOT EXISTS schedules (
     enabled BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    -- Validation: close_time must be strictly after open_time
     CONSTRAINT chk_close_after_open CHECK (close_time > open_time),
-    -- Ensure only 1 schedule row per day per device
     CONSTRAINT uq_device_day UNIQUE (device_id, day_of_week)
 );
 
 CREATE INDEX IF NOT EXISTS idx_schedules_device_id ON schedules(device_id);
 
--- 4. COMMANDS TABLE
--- Command types: OPEN, CLOSE, SET_SCHEDULE, SET_MODE
--- Status: PENDING, SENT, ACKNOWLEDGED, FAILED
+-- 5. COMMANDS TABLE (Shared command lifecycle for all operations)
 CREATE TABLE IF NOT EXISTS commands (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     device_id VARCHAR(64) NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-    command VARCHAR(32) NOT NULL CHECK (command IN ('OPEN', 'CLOSE', 'SET_SCHEDULE', 'SET_MODE')),
+    command VARCHAR(32) NOT NULL,
     requested_by VARCHAR(128) NOT NULL DEFAULT 'operator',
     status VARCHAR(16) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SENT', 'ACKNOWLEDGED', 'FAILED')),
     metadata JSONB DEFAULT '{}'::jsonb,
@@ -78,8 +81,7 @@ CREATE TABLE IF NOT EXISTS commands (
 
 CREATE INDEX IF NOT EXISTS idx_commands_device_id_created ON commands(device_id, created_at DESC);
 
--- 5. DEVICE_LOGS TABLE
--- Event types: DEVICE_ONLINE, DEVICE_OFFLINE, GATE_OPENED, GATE_CLOSED, COMMAND_SENT, COMMAND_ACKNOWLEDGED, SCHEDULE_UPDATED, ERROR
+-- 6. DEVICE_LOGS TABLE (Shared Event History)
 CREATE TABLE IF NOT EXISTS device_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     device_id VARCHAR(64) NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
@@ -91,7 +93,7 @@ CREATE TABLE IF NOT EXISTS device_logs (
 
 CREATE INDEX IF NOT EXISTS idx_device_logs_device_id_created ON device_logs(device_id, created_at DESC);
 
--- Automatic updated_at trigger function
+-- Updated_at Trigger
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -100,7 +102,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Apply triggers
 DROP TRIGGER IF EXISTS trg_update_devices_updated_at ON devices;
 CREATE TRIGGER trg_update_devices_updated_at
     BEFORE UPDATE ON devices

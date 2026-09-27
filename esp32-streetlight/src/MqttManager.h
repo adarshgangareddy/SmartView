@@ -1,14 +1,12 @@
-#ifndef MQTT_MANAGER_H
-#define MQTT_MANAGER_H
+#ifndef STREETLIGHT_MQTT_H
+#define STREETLIGHT_MQTT_H
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include "config.h"
-#include "GateController.h"
-#include "ScheduleManager.h"
-#include "RtcManager.h"
+#include "LightController.h"
 
 #if MQTT_BROKER_PORT == 8883
 #include <WiFiClientSecure.h>
@@ -16,22 +14,19 @@
 
 class MqttManager {
 public:
-  MqttManager(GateController& gate, ScheduleManager& sched, RtcManager& rtc);
+  MqttManager(LightController& controller);
   void begin();
   void loop();
 
-  void publishStatus();
+  void publishTelemetry(const StreetLightState& state);
   void publishHeartbeat();
+  void publishStatus();
   void publishAck(const char* requestId, const char* command, bool success);
-  void publishTelemetry();
 
   bool isConnected();
 
 private:
-  GateController& gateController;
-  ScheduleManager& scheduleManager;
-  RtcManager& rtcManager;
-
+  LightController& lightController;
 #if MQTT_BROKER_PORT == 8883
   WiFiClientSecure wifiClient;
 #else
@@ -41,18 +36,16 @@ private:
 
   unsigned long lastReconnectAttempt;
   unsigned long lastHeartbeatTime;
-  unsigned long lastTelemetryTime;
+
+  String topicCommand;
+  String topicStatus;
+  String topicTelemetry;
+  String topicAck;
+  String topicHeartbeat;
 
   void connectWiFi();
   bool connectMqtt();
   void handleMessage(char* topic, byte* payload, unsigned int length);
-
-  String topicCommand;
-  String topicStatus;
-  String topicConfig;
-  String topicAck;
-  String topicHeartbeat;
-  String topicTelemetry;
 };
 
-#endif // MQTT_MANAGER_H
+#endif // STREETLIGHT_MQTT_H
